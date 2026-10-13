@@ -17,6 +17,36 @@ export const StorageRuleSchema = z.object({
     .describe(
       "Optional list of Nostr pubkeys (hex) this rule applies to. When set, only blobs uploaded by one of these pubkeys are matched.",
     ),
+  nip05Domains: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Optional list of NIP-05 domains. Every pubkey listed in https://<domain>/.well-known/nostr.json is added to this rule's pubkeys allowlist. " +
+        "Fetched at startup and refreshed every storage.nip05.refreshIntervalMs. " +
+        "The domain must return its full names map when queried without ?name=.",
+    ),
+});
+
+const Nip05Schema = z.object({
+  refreshIntervalMs: z
+    .number()
+    .int()
+    .refine((v) => v === 0 || v >= 60_000, {
+      message: "Must be 0 (fetch once at startup) or at least 60000 (1 minute)",
+    })
+    .default(600_000)
+    .describe(
+      "Minimum gap in milliseconds between the end of one NIP-05 refresh and the start of the next. Uses recursive setTimeout, so the next refresh begins only after the current one completes. " +
+        "0 = fetch once at startup and never refresh. Minimum otherwise: 60 000 ms. Default: 10 minutes.",
+    ),
+  timeoutMs: z
+    .number()
+    .int()
+    .min(1000)
+    .default(5000)
+    .describe(
+      "Timeout in milliseconds for a single https://<domain>/.well-known/nostr.json fetch. A timed-out or failed fetch keeps the previously fetched pubkeys. Default: 5 seconds.",
+    ),
 });
 
 const LocalStorageSchema = z.object({
@@ -88,6 +118,9 @@ const StorageSchema = z.object({
     .describe(
       "When true, blobs with no owners are deleted during each prune cycle, regardless of expiry rules.",
     ),
+  nip05: Nip05Schema.optional()
+    .transform((v) => v ?? Nip05Schema.parse({}))
+    .describe("NIP-05 domain allowlist refresh settings. Only used by rules that set nip05Domains."),
 });
 
 const UploadSchema = z.object({

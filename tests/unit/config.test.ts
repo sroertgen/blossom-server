@@ -147,3 +147,40 @@ Deno.test("loadConfigStrict: valid file loads identically in strict mode", async
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("ConfigSchema: storage rule accepts nip05Domains", () => {
+  const config = ConfigSchema.parse({
+    storage: {
+      rules: [{ type: "*", expiration: "1 year", nip05Domains: ["example.org", "edufeed.org"] }],
+    },
+  });
+
+  assertEquals(config.storage.rules[0].nip05Domains, ["example.org", "edufeed.org"]);
+  assertEquals(config.storage.rules[0].pubkeys, undefined);
+});
+
+Deno.test("ConfigSchema: storage.nip05 defaults", () => {
+  const config = ConfigSchema.parse({});
+
+  assertEquals(config.storage.nip05.refreshIntervalMs, 600_000);
+  assertEquals(config.storage.nip05.timeoutMs, 5000);
+});
+
+Deno.test("ConfigSchema: storage.nip05.refreshIntervalMs rejects values below one minute", () => {
+  const result = ConfigSchema.safeParse({ storage: { nip05: { refreshIntervalMs: 1000 } } });
+
+  assertEquals(result.success, false);
+});
+
+Deno.test("ConfigSchema: storage.nip05.refreshIntervalMs accepts 0 (startup only)", () => {
+  const config = ConfigSchema.parse({ storage: { nip05: { refreshIntervalMs: 0, timeoutMs: 1000 } } });
+
+  assertEquals(config.storage.nip05.refreshIntervalMs, 0);
+  assertEquals(config.storage.nip05.timeoutMs, 1000);
+});
+
+Deno.test("ConfigSchema: storage.nip05.timeoutMs rejects values below one second", () => {
+  const result = ConfigSchema.safeParse({ storage: { nip05: { timeoutMs: 999 } } });
+
+  assertEquals(result.success, false);
+});

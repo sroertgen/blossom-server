@@ -21,6 +21,7 @@ import { S3Storage } from "./src/storage/s3.ts";
 import { initPool } from "./src/workers/pool.ts";
 import { buildApp } from "./src/server.ts";
 import { createPruneState, pruneStorage } from "./src/prune/prune.ts";
+import { createNip05Allowlist, startNip05Refresh } from "./src/allowlist/nip05.ts";
 
 const configPath = Deno.args[0] ?? "config.yml";
 const config = await loadConfig(configPath);
@@ -108,6 +109,27 @@ if (config.dashboard.enabled) {
   console.log("  Admin:    ready");
 }
 
+// NIP-05 domain allowlists — rules with nip05Domains get the pubkeys published in
+// each domain's /.well-known/nostr.json unioned into their pubkeys list. The first
+// fetch happens before the app is built so the allowlist is populated from the
+// first request on; a failed fetch is logged but never aborts startup.
+let stopNip05Refresh: (() => void) | undefined;
+const nip05Enabled = config.storage.rules.some((rule) => rule.nip05Domains !== undefined && rule.nip05Domains.length > 0);
+if (nip05Enabled) {
+  const allowlist = createNip05Allowlist(config.storage.rules, { timeoutMs: config.storage.nip05.timeoutMs });
+  const { domains } = await allowlist.refresh();
+  for (const result of domains) {
+    if (result.error) {
+      console.warn(`  NIP-05:   ${result.domain}: fetch failed (${result.error}) — no pubkeys until a refresh succeeds`);
+    } else {
+      console.log(`  NIP-05:   ${result.domain}: ${result.count} pubkeys`);
+    }
+  }
+  if (config.storage.nip05.refreshIntervalMs > 0) {
+    stopNip05Refresh = startNip05Refresh(allowlist, config.storage.nip05.refreshIntervalMs);
+  }
+}
+
 // Build Hono app (async — landing router loads the prebuilt client JS at startup).
 const app = await buildApp(db, storage, config);
 
@@ -181,6 +203,12 @@ const server = Deno.serve(
             : "disabled (no rules configured)"),
       );
       console.log(
+        "  NIP-05:  domain allowlists      " +
+          (nip05Enabled
+            ? `active (refresh ${config.storage.nip05.refreshIntervalMs > 0 ? `every ${config.storage.nip05.refreshIntervalMs / 1000}s` : "at startup only"})`
+            : "disabled (no rules with nip05Domains)"),
+      );
+      console.log(
         "  Admin:   dashboard              " +
           (config.dashboard.enabled ? `ready (user=${config.dashboard.username}) — http://${hostname}:${port}/admin` : "disabled"),
       );
@@ -193,6 +221,7 @@ const server = Deno.serve(
 const shutdown = () => {
   console.log("\nShutting down...");
   if (pruneTimeout !== undefined) clearTimeout(pruneTimeout);
+  stopNip05Refresh?.();
   pool.shutdown();
   server.shutdown();
   db.close();

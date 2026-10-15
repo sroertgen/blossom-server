@@ -92,7 +92,7 @@ export const RulesPage: FC<RulesPageProps> = ({ config }) => {
                   <span class="text-gray-600">—</span>
                 </Td>
                 <Td>
-                  <PubkeyList pubkeys={rule.pubkeys} />
+                  <PubkeyList pubkeys={rule.pubkeys} nip05Domains={rule.nip05Domains} />
                 </Td>
                 <Td>
                   {rule.expiration ? <Badge color="yellow">{rule.expiration}</Badge> : <span class="text-gray-600">—</span>}

@@ -114,10 +114,11 @@ if (config.dashboard.enabled) {
 // fetch happens before the app is built so the allowlist is populated from the
 // first request on; a failed fetch is logged but never aborts startup.
 let stopNip05Refresh: (() => void) | undefined;
-const nip05Enabled = config.storage.rules.some((rule) => rule.nip05Domains !== undefined && rule.nip05Domains.length > 0);
+const nip05Allowlist = createNip05Allowlist(config.storage.rules, { timeoutMs: config.storage.nip05.timeoutMs });
+const nip05Enabled = nip05Allowlist.domains.length > 0;
 if (nip05Enabled) {
-  const allowlist = createNip05Allowlist(config.storage.rules, { timeoutMs: config.storage.nip05.timeoutMs });
-  const { domains } = await allowlist.refresh();
+  const { domains } = await nip05Allowlist.refresh();
+  const failed = domains.filter((result) => result.error).map((result) => result.domain);
   for (const result of domains) {
     if (result.error) {
       console.warn(`  NIP-05:   ${result.domain}: fetch failed (${result.error}) — no pubkeys until a refresh succeeds`);
@@ -125,8 +126,16 @@ if (nip05Enabled) {
       console.log(`  NIP-05:   ${result.domain}: ${result.count} pubkeys`);
     }
   }
-  if (config.storage.nip05.refreshIntervalMs > 0) {
-    stopNip05Refresh = startNip05Refresh(allowlist, config.storage.nip05.refreshIntervalMs);
+  const intervalMs = config.storage.nip05.refreshIntervalMs;
+  if (intervalMs > 0) {
+    // A failed startup fetch is retried soon rather than after the full interval.
+    const initialDelayMs = failed.length > 0 ? Math.min(30_000, intervalMs) : intervalMs;
+    if (failed.length > 0) console.warn(`  NIP-05:   retrying ${failed.join(", ")} in ${initialDelayMs / 1000}s`);
+    stopNip05Refresh = startNip05Refresh(nip05Allowlist, intervalMs, { initialDelayMs });
+  } else if (failed.length > 0) {
+    console.warn(
+      `  NIP-05:   WARNING — storage.nip05.refreshIntervalMs is 0, so the allowlist for ${failed.join(", ")} stays EMPTY until the server is restarted`,
+    );
   }
 }
 

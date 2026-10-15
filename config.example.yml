@@ -120,7 +120,8 @@ storage:
 
   # Example: NIP-05 domain allowlist — everyone with a handle on example.org may
   # upload (combine with upload.requirePubkeyInRule: true for a closed server).
-  # Static pubkeys and domains can be mixed in one rule.
+  # Static pubkeys and domains can be mixed in one rule. A rule with nip05Domains
+  # is always pubkey-scoped, even while its fetched list is still empty.
   # rules:
   #   - type: "*"
   #     expiration: 1 year

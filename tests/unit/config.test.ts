@@ -184,3 +184,31 @@ Deno.test("ConfigSchema: storage.nip05.timeoutMs rejects values below one second
 
   assertEquals(result.success, false);
 });
+
+Deno.test("ConfigSchema: storage.nip05.refreshIntervalMs rejects values beyond the setTimeout limit", () => {
+  const result = ConfigSchema.safeParse({ storage: { nip05: { refreshIntervalMs: 2_147_483_648 } } });
+
+  assertEquals(result.success, false);
+  assertEquals(result.error?.issues[0].message.includes("2147483647"), true);
+});
+
+Deno.test("ConfigSchema: nip05Domains rejects values that are not bare domains", () => {
+  for (const domain of ["https://example.org", "example.org/", "example.org/.well-known", "user:pw@example.org", "example.org?name=alice", ""]) {
+    const result = ConfigSchema.safeParse({
+      storage: { rules: [{ type: "*", expiration: "1 year", nip05Domains: ["ok.example", domain] }] },
+    });
+
+    assertEquals(result.success, false, `domain=${JSON.stringify(domain)}`);
+    const issue = result.error!.issues[0];
+    assertEquals(issue.path, ["storage", "rules", 0, "nip05Domains", 1]);
+    assertEquals(issue.message.includes("Invalid NIP-05 domain"), true, issue.message);
+  }
+});
+
+Deno.test("ConfigSchema: nip05Domains accepts IDN domains", () => {
+  const config = ConfigSchema.parse({
+    storage: { rules: [{ type: "*", expiration: "1 year", nip05Domains: ["bücher.example", "xn--bcher-kva.example", "Example.ORG"] }] },
+  });
+
+  assertEquals(config.storage.rules[0].nip05Domains, ["bücher.example", "xn--bcher-kva.example", "Example.ORG"]);
+});

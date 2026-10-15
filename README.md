@@ -177,12 +177,13 @@ Compose example and NixOS module enable this safeguard automatically; direct sou
 | `storage.backend`                 | `local`          | Storage backend: `local` or `s3`                                                                                       |
 | `storage.local.dir`               | `./data/blobs`   | Directory for blob files (local backend)                                                                               |
 | `storage.removeWhenNoOwners`      | `false`          | Delete blobs with no owners on each prune cycle, regardless of expiry rules                                            |
+| `storage.nip05.refreshIntervalMs` | `600000`         | How often (ms) rules with `nip05Domains` re-fetch `/.well-known/nostr.json`; 0 = startup only                          |
+| `storage.nip05.timeoutMs`         | `5000`           | Timeout (ms) for a single `nostr.json` fetch; a failed fetch keeps the previously fetched pubkeys                      |
 | `upload.enabled`                  | `true`           | Enable `PUT /upload`                                                                                                   |
 | `upload.requireAuth`              | `true`           | Require Nostr auth for uploads                                                                                         |
 | `upload.maxSize`                  | `2147483648`     | Maximum upload size in bytes (2 GB)                                                                                    |
 | `upload.workers`                  | `0`              | Upload worker threads (0 = one per CPU core)                                                                           |
 | `upload.requirePubkeyInRule`      | `false`          | Reject uploads unless the uploader's pubkey appears in a storage rule                                                  |
-| `storage.nip05.refreshIntervalMs` | `600000`         | How often (ms) rules with `nip05Domains` re-fetch `/.well-known/nostr.json`; 0 = startup only                          |
 | `mirror.enabled`                  | `true`           | Enable `PUT /mirror` (BUD-04)                                                                                          |
 | `mirror.connectTimeout`           | `30000`          | Timeout (ms) to connect to the origin; 0 = no limit                                                                    |
 | `mirror.bodyTimeout`              | `0`              | Timeout (ms) for full body transfer from origin; 0 = no limit                                                          |
@@ -266,7 +267,9 @@ storage:
       nip05Domains: ["example.org"]
 ```
 
-A failed refresh keeps the previously fetched pubkeys; a domain that has never been fetched successfully grants nothing.
+A failed refresh keeps the previously fetched pubkeys; a domain that has never been fetched successfully grants nothing. A rule with `nip05Domains` is always
+pubkey-scoped, even while its fetched list is still empty, so it never matches everyone. Removing a name from `nostr.json` revokes that user's upload access on
+the next refresh and moves their existing blobs to the next matching rule for retention.
 
 ## Authentication (BUD-11)
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeNip05Domain } from "../allowlist/nip05-domain.ts";
 
 export const StorageRuleSchema = z.object({
   type: z
@@ -20,6 +21,15 @@ export const StorageRuleSchema = z.object({
   nip05Domains: z
     .array(z.string())
     .optional()
+    .superRefine((domains, ctx) => {
+      domains?.forEach((domain, index) => {
+        try {
+          normalizeNip05Domain(domain);
+        } catch (err) {
+          ctx.addIssue({ code: "custom", path: [index], message: err instanceof Error ? err.message : String(err) });
+        }
+      });
+    })
     .describe(
       "Optional list of NIP-05 domains. Every pubkey listed in https://<domain>/.well-known/nostr.json is added to this rule's pubkeys allowlist. " +
         "Fetched at startup and refreshed every storage.nip05.refreshIntervalMs. " +
@@ -31,6 +41,7 @@ const Nip05Schema = z.object({
   refreshIntervalMs: z
     .number()
     .int()
+    .max(2_147_483_647, "Must be at most 2147483647 ms (~24.8 days), the largest delay setTimeout supports")
     .refine((v) => v === 0 || v >= 60_000, {
       message: "Must be 0 (fetch once at startup) or at least 60000 (1 minute)",
     })

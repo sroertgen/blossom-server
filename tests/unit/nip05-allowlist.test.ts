@@ -113,6 +113,42 @@ Deno.test("fetchNip05Pubkeys: rejects domains that smuggle a path or query", asy
   assertEquals(fetchImpl.calls.length, 0);
 });
 
+Deno.test("fetchNip05Pubkeys: asks fetch to fail on redirects and treats a redirect response as a failure", async () => {
+  let seenRedirect: RequestRedirect | undefined;
+  const fetchImpl = ((_input: string | URL | Request, init?: RequestInit) => {
+    seenRedirect = init?.redirect;
+    return Promise.resolve(new Response(null, { status: 301, headers: { location: "https://elsewhere.example/nostr.json" } }));
+  }) as FetchImpl;
+
+  await assertRejects(() => fetchNip05Pubkeys("example.org", { fetchImpl, timeoutMs: 1000 }), Error, "HTTP 301");
+  assertEquals(seenRedirect, "error");
+});
+
+Deno.test("createNip05Allowlist: a redirecting domain keeps the previously fetched set", async () => {
+  const rule: StorageRule = { type: "*", expiration: "1 year", nip05Domains: ["example.org"] };
+  let current: FetchImpl = jsonFetch({ names: { alice: ALICE } });
+  const fetchImpl = ((input: string | URL | Request, init?: RequestInit) => current(input, init)) as FetchImpl;
+  const allowlist = createNip05Allowlist([rule], { fetchImpl, timeoutMs: 1000 });
+
+  await allowlist.refresh();
+  current = (() => Promise.resolve(Response.redirect("https://elsewhere.example/nostr.json", 301))) as FetchImpl;
+  const { domains } = await allowlist.refresh();
+
+  assertEquals(domains, [{ domain: "example.org", count: 1, error: "HTTP 301", changed: false }]);
+  assertEquals(rule.pubkeys, [ALICE]);
+});
+
+Deno.test("createNip05Allowlist: IDN domains are normalized to punycode and fetched once", async () => {
+  const rule: StorageRule = { type: "*", expiration: "1 year", nip05Domains: ["Bücher.example", "xn--bcher-kva.example"] };
+  const fetchImpl = jsonFetch({ names: { alice: ALICE } });
+  const allowlist = createNip05Allowlist([rule], { fetchImpl, timeoutMs: 1000 });
+
+  assertEquals(allowlist.domains, ["xn--bcher-kva.example"]);
+  await allowlist.refresh();
+  assertEquals(fetchImpl.calls, ["https://xn--bcher-kva.example/.well-known/nostr.json"]);
+  assertEquals(rule.pubkeys, [ALICE]);
+});
+
 // ---------------------------------------------------------------------------
 // createNip05Allowlist
 // ---------------------------------------------------------------------------
@@ -279,7 +315,7 @@ Deno.test("startNip05Refresh: schedules the first refresh after intervalMs, re-s
   const timers = fakeTimers();
   const log = fakeLog();
 
-  const stop = startNip05Refresh(allowlist, 60_000, log, timers);
+  const stop = startNip05Refresh(allowlist, 60_000, { log, timers });
   assertEquals(refreshes, 0);
   assertEquals([...timers.pending.values()][0].ms, 60_000);
 
@@ -302,6 +338,26 @@ Deno.test("startNip05Refresh: schedules the first refresh after intervalMs, re-s
   assertEquals(timers.pending.size, 0, "stop() cancels the pending timer");
 });
 
+Deno.test("startNip05Refresh: initialDelayMs shortens only the first wait", async () => {
+  let refreshes = 0;
+  const allowlist: Nip05Allowlist = {
+    domains: ["example.org"],
+    refresh: () => {
+      refreshes++;
+      return Promise.resolve({ domains: [] });
+    },
+  };
+  const timers = fakeTimers();
+
+  const stop = startNip05Refresh(allowlist, 600_000, { initialDelayMs: 30_000, log: fakeLog(), timers });
+  assertEquals([...timers.pending.values()][0].ms, 30_000);
+
+  await timers.tick();
+  assertEquals(refreshes, 1);
+  assertEquals([...timers.pending.values()][0].ms, 600_000, "subsequent runs use the full interval");
+  stop();
+});
+
 Deno.test("startNip05Refresh: stop() during a running refresh prevents re-scheduling", async () => {
   let release: () => void = () => {};
   const allowlist: Nip05Allowlist = {
@@ -313,7 +369,7 @@ Deno.test("startNip05Refresh: stop() during a running refresh prevents re-schedu
   };
   const timers = fakeTimers();
 
-  const stop = startNip05Refresh(allowlist, 60_000, fakeLog(), timers);
+  const stop = startNip05Refresh(allowlist, 60_000, { log: fakeLog(), timers });
   const [, entry] = [...timers.pending.entries()][0];
   timers.pending.clear();
   entry.fn(); // refresh now in flight
@@ -332,7 +388,7 @@ Deno.test("startNip05Refresh: a throwing refresh is logged and the loop continue
   const timers = fakeTimers();
   const log = fakeLog();
 
-  const stop = startNip05Refresh(allowlist, 60_000, log, timers);
+  const stop = startNip05Refresh(allowlist, 60_000, { log, timers });
   await timers.tick();
 
   assertEquals(log.lines, ["[nip05] Unexpected error in refresh loop: boom"]);

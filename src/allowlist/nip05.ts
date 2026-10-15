@@ -23,6 +23,7 @@
  */
 
 import type { StorageRule } from "../config/schema.ts";
+import { normalizeNip05Domain, nostrJsonUrl } from "./nip05-domain.ts";
 
 const HEX_PUBKEY_RE = /^[0-9a-f]{64}$/;
 
@@ -50,39 +51,23 @@ export interface Nip05Allowlist {
   refresh(): Promise<{ domains: Nip05DomainResult[] }>;
 }
 
-function normalizeDomain(domain: string): string {
-  return domain.trim().toLowerCase();
-}
-
-/** Build the nostr.json URL, rejecting domains that smuggle in a path, query, or credentials. */
-function nostrJsonUrl(domain: string): URL {
-  let url: URL;
-  try {
-    url = new URL(`https://${domain}/.well-known/nostr.json`);
-  } catch {
-    throw new Error(`Invalid NIP-05 domain "${domain}"`);
-  }
-  if (url.host !== domain || url.username || url.password || url.pathname !== "/.well-known/nostr.json" || url.search) {
-    throw new Error(`Invalid NIP-05 domain "${domain}"`);
-  }
-  return url;
-}
-
 /**
  * Fetch `https://<domain>/.well-known/nostr.json` and return the set of valid
  * pubkeys from its `names` map.
  *
- * Throws on a non-2xx response, a non-JSON body, or a body that is not an
- * object. Values that are not 64 hex characters are skipped; uppercase hex is
- * lowercased. A missing or malformed `names` map yields an empty set.
+ * Throws on a redirect (NIP-05 says fetchers MUST ignore redirects), a non-2xx
+ * response, a non-JSON body, or a body that is not an object. Values that are
+ * not 64 hex characters are skipped; uppercase hex is lowercased. A missing or
+ * malformed `names` map yields an empty set.
  */
 export async function fetchNip05Pubkeys(
   domain: string,
   { fetchImpl = fetch, timeoutMs }: Nip05FetchOptions,
 ): Promise<Set<string>> {
-  const url = nostrJsonUrl(normalizeDomain(domain));
+  const url = nostrJsonUrl(normalizeNip05Domain(domain));
   const res = await fetchImpl(url.toString(), {
     headers: { accept: "application/json" },
+    redirect: "error",
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) {
@@ -131,7 +116,7 @@ export function createNip05Allowlist(
     .map((rule) => ({
       rule,
       staticPubkeys: [...(rule.pubkeys ?? [])],
-      domains: [...new Set(rule.nip05Domains!.map(normalizeDomain))],
+      domains: [...new Set(rule.nip05Domains!.map(normalizeNip05Domain))],
     }));
   const domains = [...new Set(entries.flatMap((entry) => entry.domains))];
   const cache = new Map<string, Set<string>>();
@@ -178,6 +163,13 @@ const DEFAULT_TIMERS: Nip05RefreshTimers = {
   clearTimeout: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
 };
 
+export interface Nip05RefreshOptions {
+  /** Delay before the first refresh of the loop. Defaults to intervalMs; shorten it to retry a failed startup fetch sooner. */
+  initialDelayMs?: number;
+  log?: Pick<Console, "log" | "warn">;
+  timers?: Nip05RefreshTimers;
+}
+
 /**
  * Refresh `allowlist` every `intervalMs` using a recursive setTimeout (the next
  * run is scheduled only after the current one completes, like the prune loop).
@@ -186,8 +178,7 @@ const DEFAULT_TIMERS: Nip05RefreshTimers = {
 export function startNip05Refresh(
   allowlist: Nip05Allowlist,
   intervalMs: number,
-  log: Pick<Console, "log" | "warn"> = console,
-  timers: Nip05RefreshTimers = DEFAULT_TIMERS,
+  { initialDelayMs = intervalMs, log = console, timers = DEFAULT_TIMERS }: Nip05RefreshOptions = {},
 ): () => void {
   let stopped = false;
   let timer: unknown;
@@ -209,7 +200,7 @@ export function startNip05Refresh(
     if (!stopped) timer = timers.setTimeout(run, intervalMs);
   };
 
-  timer = timers.setTimeout(run, intervalMs);
+  timer = timers.setTimeout(run, initialDelayMs);
   return () => {
     stopped = true;
     if (timer !== undefined) timers.clearTimeout(timer);
